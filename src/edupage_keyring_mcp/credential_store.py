@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Saved Sessions in the Credential Store (macOS Keychain or Windows Credential Manager).
+"""Saved Sessions and Remembered Accounts in the Credential Store (macOS Keychain or Windows Credential Manager).
 
 A Saved Session is the EduPage session cookie from one browser sign-in, together
 with the EduPage account it belongs to, stored for one school (and optionally one
@@ -41,8 +41,8 @@ TOKEN_CHARS = frozenset('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012
 
 
 # The OS Credential Store backend accepted on each platform (ADR 0001); nothing else,
-# with the attributes set on it before use. On Windows a Saved Session must stay on
-# this machine, never roam to others with a domain profile.
+# with the attributes set on it before use. On Windows a Saved Session or Remembered
+# Account must stay on this machine, never roam to others with a domain profile.
 CREDENTIAL_STORES: dict[str, tuple[str, dict[str, Any]]] = {
     'darwin': ('keyring.backends.macOS', {}),
     'win32': ('keyring.backends.Windows', {'persist': 'local machine'}),

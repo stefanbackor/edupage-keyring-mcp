@@ -42,7 +42,11 @@ reopen it. The Saved Session goes to Windows Credential Manager without a
 prompt; see [Windows (beta)](README.md#windows-beta) in the README.
 
 To try the sign-in flow, run `uv run edupage-keyring-mcp logout myschool` and
-ask Claude something about school.
+ask Claude something about school. `logout` also removes the Remembered
+Account, so the window opens again. To see a Remembered Account at work, sign
+in with "Remember password" ticked, leave the client closed for a few hours so
+EduPage ends the session, then ask something: the server log shows
+`remembered-sign-in myschool READY` and no window opens.
 
 ## The Claude Desktop extension
 

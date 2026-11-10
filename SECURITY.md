@@ -18,7 +18,7 @@ end up outside the Credential Store (the macOS Keychain or Windows Credential
 Manager), or a Remembered Account could be kept or used without the person
 having ticked "Remember password" in EduPage's own dialog.
 
-Out of scope: EduPage's own behaviour and the security of the person's Mac.
+Out of scope: EduPage's own behaviour and the security of the person's computer.
 
 ## Supported versions
 

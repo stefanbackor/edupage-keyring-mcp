@@ -8,11 +8,12 @@ grades, homework, tests, absences, messages, menus and more, for every child
 and school you have, **without ever storing your password**.
 
 You sign in once per school in Chrome, on EduPage's own page, two-factor
-included. Only EduPage's session cookie (`PHPSESSID`) is kept, in your
-computer's **Credential Store**: the macOS Keychain, or Windows Credential
-Manager (Windows support is **beta**). Tick EduPage's own "Remember password"
-while signing in and you [stay signed in](#staying-signed-in) without doing it
-again. Built on [`edupage-api`](https://github.com/EdupageAPI/edupage-api).
+included. EduPage's session cookie (`PHPSESSID`) is kept in your computer's
+**Credential Store**: the macOS Keychain, or Windows Credential Manager
+(Windows support is **beta**). Tick EduPage's own "Remember password" while
+signing in, and what EduPage issues for that is kept there too, so you
+[stay signed in](#staying-signed-in) without a window every morning. Built on
+[`edupage-api`](https://github.com/EdupageAPI/edupage-api).
 
 ## What you can ask
 
@@ -128,16 +129,17 @@ a stdio server.
 Ask Claude about school, for example "What's on the timetable tomorrow?". The
 first time, Claude opens your school's EduPage in a Chrome window (Claude
 Desktop asks you first). Sign in there the way you always do: password,
-two-factor or QR code. EduPage then asks "Remember login credentials?": tick
-**Remember username** and **Remember password** if this is your own computer
-and you don't want to sign in again every day (see
+two-factor or QR code. When EduPage then asks "Remember login credentials?",
+tick **Remember username** and **Remember password** if this is your own
+computer and you don't want to sign in again every day (see
 [Staying signed in](#staying-signed-in)). The window closes by itself, the
 session is saved to the Credential Store, and Claude answers. If macOS asks
-whether Python may use the Keychain, choose **Always Allow**.
+whether Python may use the Keychain, choose **Always Allow** (it may ask once
+for the session and once for the remembered account).
 
 Prefer to sign in before connecting a client? Run
 `uvx edupage-keyring-mcp login myschool` (this works for the Claude Desktop
-extension too: both use the same Saved Session).
+extension too: both use the same Saved Session and Remembered Account).
 
 ### Options
 
@@ -152,7 +154,7 @@ and the keep-alive.
   does not affect the others.
 - **Two accounts at one school** (say, as a parent and as a teacher): give each
   its own label, for example `"--school", "myschool=teacher"`, and sign in to each
-  once. The label only names its Credential Store entry.
+  once. The label only names its Credential Store entries.
 - **No sign-in windows from the server:** `"--no-browser-signin"`. `sign_in`
   then reports `SIGNIN_UNAVAILABLE`, and you sign in with `login` in a terminal
   (see [Command line](#command-line)).
@@ -197,8 +199,9 @@ how it goes.
   uv fetches Python itself; an existing Python 3.10 or newer works too.
 - **Where the session is kept:** Windows Credential Manager. To see or delete
   it, open **Control Panel → Credential Manager → Windows Credentials** and
-  look for the entries under `edupage-keyring-mcp` (or run
-  `uvx edupage-keyring-mcp logout myschool`).
+  look for the entries under `edupage-keyring-mcp`: `myschool` is the session
+  and `myschool:remembered` the remembered account, if you have one (or run
+  `uvx edupage-keyring-mcp logout myschool`, which removes both).
 
 ## Staying signed in
 
@@ -234,8 +237,9 @@ does for a remembered account, and Claude just answers. No window opens.
 
 ## Signing in again
 
-Without a remembered account, or once EduPage has stopped accepting it, Claude does the same as the
-first time: it gets `AUTH_REQUIRED` and asks whether it may open the sign-in.
+Without a remembered account, or once EduPage has stopped accepting it, Claude
+does the same as the first time when the session has expired: it gets
+`AUTH_REQUIRED` and asks whether it may open the sign-in.
 If you agree, it calls `sign_in`, and a Chrome window opens on your school's
 EduPage. While you sign in, Claude waits with
 `wait_for_sign_in`, which returns as soon as you're done, and carries on with
@@ -257,10 +261,12 @@ edupage-keyring-mcp probe --school NAME [...]   # every read tool once; statuses
 ```
 
 Run each with `uvx edupage-keyring-mcp@latest ...`, also when you use the
-Claude Desktop extension: the commands work on the same Saved Sessions.
-`logout` removes the local
-session and remembered account only; EduPage itself is not logged out. `probe` is handy when reporting
-a problem: its output contains no school data.
+Claude Desktop extension: the commands work on the same Saved Sessions and
+Remembered Accounts. `logout` removes the local session and remembered account
+only; EduPage itself is not logged out, and what it remembers is not cancelled
+there. `status` and `probe` sign in again from a remembered account when the
+session has expired, as the server does. `probe` is handy when reporting a
+problem: its output contains no school data.
 
 ## Features
 
@@ -272,8 +278,8 @@ name (accents optional, so `simon` finds Šimon), full name, student ID, or the
 
 | Tool | Returns |
 | --- | --- |
-| `auth_status` | Whether the saved session works, and how a sign-in started by `sign_in` went |
-| `sign_in` | Opens EduPage's sign-in page in Chrome when the session is missing or expired |
+| `auth_status` | Whether the saved session works (after signing in again from a remembered account, if there is one), and how a sign-in started by `sign_in` went |
+| `sign_in` | Opens EduPage's sign-in page in Chrome when the session is missing, or expired with no remembered account to renew it |
 | `wait_for_sign_in` | Waits (up to 50 s per call) for that sign-in to finish, then reports the new session |
 | `list_schools` | Schools, session status, role (parent, student, teacher), number of children |
 | `list_children` | Your children: name, class, student ID, `ref` |
@@ -346,7 +352,7 @@ These are marked `destructiveHint`; clients such as Claude Desktop ask before ea
 ## Security model
 
 - **No password anywhere.** It is typed only into EduPage's page in a throwaway
-  Chrome window. The Credential Store entry (a Saved Session) holds only
+  Chrome window, and nothing here reads it. A Saved Session holds only
   EduPage's session cookie, `PHPSESSID`, plus the account ID and the login name
   EduPage reports. Sessions saved by older versions with more cookies keep
   working until they expire.
@@ -363,8 +369,9 @@ These are marked `destructiveHint`; clients such as Claude Desktop ask before ea
   [ADR 0002](docs/adr/0002-remembered-accounts-not-passwords.md).
 - **Sign-in from the server stays local.** `sign_in` takes only a configured
   school and runs the same `login` command in a separate process. It opens a
-  window only when the saved session is missing or expired, at most one per
-  school at a time, and returns only that command's status code. The window
+  window only when the saved session is missing or expired and no remembered
+  account renews it, at most one per school at a time, and returns only that
+  command's status code. The window
   shows EduPage's real login page, so the most a misbehaving model can do is
   open it. Turn it off with `--no-browser-signin`; the Claude Desktop
   extension has no such setting, so use the uvx install if you need it.
@@ -372,14 +379,15 @@ These are marked `destructiveHint`; clients such as Claude Desktop ask before ea
   or Windows Credential Manager, through `keyring`'s built-in backends. With
   any other `keyring` backend (third-party password managers, file-based
   keyrings) or on another platform the server refuses to run with
-  `CREDENTIAL_STORE_REQUIRED`, so sessions never land in a plaintext keyring
+  `CREDENTIAL_STORE_REQUIRED`, so neither ever lands in a plaintext keyring
   file. See [ADR 0001](docs/adr/0001-os-credential-stores-only.md). On Windows
-  the entry is kept on this computer only and never roams with a domain
+  the entries are kept on this computer only and never roam with a domain
   profile.
 - **Confined network.** `edupage-api` gets a replacement session that allows
   HTTPS to your configured school host only, checks every redirect hop, caps
   every response at 8 MB (attachments at 3 MB) and ignores proxy and `.netrc`
   settings. Cookies loaded from the Credential Store are validated for that host first.
+  Signing in again from a remembered account goes through the same session.
 - **Narrow inputs.** No tool accepts a URL, cookie, session ID, header or
   password. Dates are ISO and window-limited. `school` only picks a configured
   school. Attachments are fetched by file id; the model never sees their URLs.
@@ -418,9 +426,10 @@ project.
 This is an independent open-source project. It is not affiliated with,
 endorsed by, or supported by aSc Applied Software Consultants, s.r.o., the
 company that makes EduPage. The EduPage name is used only to say which service
-this software works with. All EduPage access goes through
+this software works with. Nearly all EduPage access goes through
 [`edupage-api`](https://github.com/EdupageAPI/edupage-api), an independent
-community library that is not part of this project either. It relies on
+community library that is not part of this project either; the menu page and
+the remembered sign-in are read by this project itself. Both rely on
 EduPage's undocumented web endpoints, which can change without notice; when
 they do, this server may stop working until `edupage-api` and then this project
 are updated. Use it at your own risk.

@@ -57,7 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
         if name == 'login':
             cmd.add_argument('--timeout', type=int, default=600, help='Seconds to wait for sign-in.')
 
-    status = sub.add_parser('status', help='Check saved sessions (prints statuses only).')
+    status = sub.add_parser('status', help='Check saved sessions, renewing an expired one from a '
+                                           'remembered account (prints statuses only).')
     _schools_parser(status)
     probe = sub.add_parser('probe', help='Call every read tool once; prints statuses and counts only.')
     _schools_parser(probe)
