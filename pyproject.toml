@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "edupage-keyring-mcp"
-version = "0.6.0"
+version = "0.7.0"
 description = "EduPage MCP server for Claude and other MCP clients: timetables, grades, homework, messages and more, with the session kept in the OS Credential Store (macOS Keychain or Windows Credential Manager) and no stored password."
 readme = "README.md"
 license = "GPL-3.0-or-later"
