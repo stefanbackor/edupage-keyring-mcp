@@ -10,7 +10,9 @@ and school you have, **without ever storing your password**.
 You sign in once per school in Chrome, on EduPage's own page, two-factor
 included. Only EduPage's session cookie (`PHPSESSID`) is kept, in your
 computer's **Credential Store**: the macOS Keychain, or Windows Credential
-Manager (Windows support is **beta**). Built on [`edupage-api`](https://github.com/EdupageAPI/edupage-api).
+Manager (Windows support is **beta**). Tick EduPage's own "Remember password"
+while signing in and you [stay signed in](#staying-signed-in) without doing it
+again. Built on [`edupage-api`](https://github.com/EdupageAPI/edupage-api).
 
 ## What you can ask
 
@@ -126,9 +128,12 @@ a stdio server.
 Ask Claude about school, for example "What's on the timetable tomorrow?". The
 first time, Claude opens your school's EduPage in a Chrome window (Claude
 Desktop asks you first). Sign in there the way you always do: password,
-two-factor or QR code. The window closes by itself, the session is saved to the
-Credential Store, and Claude answers. If macOS asks whether Python may use the
-Keychain, choose **Always Allow**.
+two-factor or QR code. EduPage then asks "Remember login credentials?": tick
+**Remember username** and **Remember password** if this is your own computer
+and you don't want to sign in again every day (see
+[Staying signed in](#staying-signed-in)). The window closes by itself, the
+session is saved to the Credential Store, and Claude answers. If macOS asks
+whether Python may use the Keychain, choose **Always Allow**.
 
 Prefer to sign in before connecting a client? Run
 `uvx edupage-keyring-mcp login myschool` (this works for the Claude Desktop
@@ -160,9 +165,10 @@ and the keep-alive.
   with the school and status code to the server log (`keep-alive myschool READY`).
   If EduPage has ended the session anyway, the server stops for that school
   until you next use it. It only runs
-  while the client is open and the computer is awake: after a night asleep you
-  may still need to sign in again. In the Claude Desktop extension, this is the
-  **Keep-alive (minutes)** field.
+  while the client is open and the computer is awake: after a night asleep the
+  session is gone, and the server signs in again by itself only if you ticked
+  [Remember password](#staying-signed-in). In the Claude Desktop extension,
+  this is the **Keep-alive (minutes)** field.
 - **Attachments on EduPage file servers:** if `get_attachment` reports
   `REDIRECT_NOT_ALLOWED`, allow that exact host with
   `"--download-host", "cloud-4.edupage.org"`. Only `*.edupage.org` hosts are accepted.
@@ -194,11 +200,41 @@ how it goes.
   look for the entries under `edupage-keyring-mcp` (or run
   `uvx edupage-keyring-mcp logout myschool`).
 
-## Signing in again
+## Staying signed in
 
 A session lasts until EduPage expires it, which it does after about 2 hours
 without use. While your client is open, the [keep-alive](#options) prevents
-that. Once it has expired anyway (say, after the computer slept), Claude does the same as the
+that, but not while the computer sleeps.
+
+After you sign in, EduPage's own page asks "Remember login credentials?". Tick
+**Remember username** and **Remember password** there and press **Save**.
+EduPage then sets two long-lived cookies (`edusrs` and `egdid`, good for 400
+days) that make it recognise that sign-in again, and this server keeps them in
+the Credential Store as a second entry beside the session. The next time
+EduPage has ended the session, the server signs in the way EduPage's own page
+does for a remembered account, and Claude just answers. No window opens.
+
+- Your password is not involved: it is never read, stored or sent by this
+  server. What is kept is what EduPage issued for remembering you.
+- It is used only when you ask Claude something and the session is gone,
+  never by the keep-alive, and goes only to your school's EduPage host. Each
+  use writes one line to the server log (`remembered-sign-in myschool READY`).
+- It is kept only if EduPage confirms it remembers the password for that
+  school. Where EduPage does not offer that for your account, the box is
+  greyed out and nothing changes.
+- To stop: run `logout`, or sign in once without ticking the box. It is also
+  dropped when EduPage no longer accepts it (for example when EduPage starts
+  asking for two-factor).
+- With two-factor sign-in, EduPage adds a third box, "Don't use two-step
+  verification the next time you sign in from this browser". Without it the
+  server cannot sign in by itself. With it, it should; this has not been tried
+  on a two-factor account yet.
+- EduPage warns: never save your password on public or classroom computers.
+  The same goes here.
+
+## Signing in again
+
+Without a remembered account, or once EduPage has stopped accepting it, Claude does the same as the
 first time: it gets `AUTH_REQUIRED` and asks whether it may open the sign-in.
 If you agree, it calls `sign_in`, and a Chrome window opens on your school's
 EduPage. While you sign in, Claude waits with
@@ -223,7 +259,7 @@ edupage-keyring-mcp probe --school NAME [...]   # every read tool once; statuses
 Run each with `uvx edupage-keyring-mcp@latest ...`, also when you use the
 Claude Desktop extension: the commands work on the same Saved Sessions.
 `logout` removes the local
-session only; EduPage itself is not logged out. `probe` is handy when reporting
+session and remembered account only; EduPage itself is not logged out. `probe` is handy when reporting
 a problem: its output contains no school data.
 
 ## Features
@@ -316,6 +352,15 @@ These are marked `destructiveHint`; clients such as Claude Desktop ask before ea
   working until they expire.
   No username is needed either. The server refuses to start if any `EDUPAGE_*`
   environment variable other than the optional `EDUPAGE_USERNAME` label is set.
+- **Remembering is EduPage's, and yours to choose.** Nothing in this server
+  reads the sign-in page: it takes cookies from the window after you are signed
+  in. `edusrs` and `egdid` are kept (a Remembered Account) only when you ticked
+  "Remember password" in EduPage's dialog and EduPage confirms it. They are a
+  longer-lived secret than the session: whoever copies that Credential Store
+  entry can sign in to EduPage as you for as long as EduPage honours it (up to
+  400 days), though they never learn your password. `logout` deletes your copy
+  but does not cancel it at EduPage. No tool accepts or returns them. See
+  [ADR 0002](docs/adr/0002-remembered-accounts-not-passwords.md).
 - **Sign-in from the server stays local.** `sign_in` takes only a configured
   school and runs the same `login` command in a separate process. It opens a
   window only when the saved session is missing or expired, at most one per
@@ -323,7 +368,7 @@ These are marked `destructiveHint`; clients such as Claude Desktop ask before ea
   shows EduPage's real login page, so the most a misbehaving model can do is
   open it. Turn it off with `--no-browser-signin`; the Claude Desktop
   extension has no such setting, so use the uvx install if you need it.
-- **OS Credential Store only.** Saved Sessions go only to the macOS Keychain
+- **OS Credential Store only.** Saved Sessions and Remembered Accounts go only to the macOS Keychain
   or Windows Credential Manager, through `keyring`'s built-in backends. With
   any other `keyring` backend (third-party password managers, file-based
   keyrings) or on another platform the server refuses to run with

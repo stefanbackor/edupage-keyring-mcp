@@ -8,6 +8,12 @@ account page we take EduPage's session cookie (`PHPSESSID`, the only one it
 needs) from that window, prove it works through `SchoolHttp`, and store it. The window's cookies and
 storage live in memory and are discarded when Chrome closes.
 
+One exception, and only at the person's request (ADR 0002): when they tick
+"Remember password" in the dialog EduPage shows after signing in, EduPage sets
+the cookies its own remembering works by. If EduPage then confirms it remembers
+the account, those cookies are kept as a Remembered Account, so the server can
+sign in again without a window. A sign-in without that tick forgets it again.
+
 `BrowserSignIn` lets the running MCP server start that same `login` command in
 a child process when a session is missing or expired, so the person can sign
 in without a terminal. The child's output is read for its status code only.
@@ -25,8 +31,10 @@ from urllib.parse import urlsplit
 
 from .client import fetch_userhome, open_edupage, reported_login
 from .errors import EduPageError
-from .credential_store import Cookie, SavedSession, SessionStore, parse_cookie, session_cookies
+from .credential_store import (Cookie, RememberedAccount, SavedSession, SessionStore, parse_cookie,
+                               session_cookies)
 from .net import school_host
+from .remembered import remember_cookies, remembered_username
 
 ACCOUNT_PAGES = ('/user', '/timeline', '/dashboard')
 SESSION_COOKIE = 'PHPSESSID'
@@ -39,9 +47,10 @@ def _signed_in(host: str) -> Callable[[str], bool]:
     return check
 
 
-def capture_session_cookie(school: str, wait_seconds: int = 600,
-                           playwright: Callable[[], Any] | None = None) -> Cookie:
-    """Show EduPage in Chrome and return the school's session cookie once the person is signed in.
+def capture_cookies(school: str, wait_seconds: int = 600,
+                    playwright: Callable[[], Any] | None = None) -> tuple[Cookie, tuple[Cookie, ...]]:
+    """Show EduPage in Chrome; once the person is signed in, return the school's session
+    cookie and the cookies of EduPage's own "Remember password", if it set any.
 
     Raises SCHEMA_CHANGED when the window holds no `PHPSESSID` for the school host.
     """
@@ -74,7 +83,7 @@ def capture_session_cookie(school: str, wait_seconds: int = 600,
     mine = []
     for c in jar:
         if c.get('name') != SESSION_COOKIE or str(c.get('domain', '')).lstrip('.') != host:
-            continue  # EduPage needs nothing else; tracking and device cookies stay behind
+            continue  # the session needs nothing else; tracking cookies stay behind
         try:
             mine.append(parse_cookie(c.get('name'), c.get('value'), c.get('domain'),
                                      c.get('path', '/'), c.get('expires', -1)))
@@ -82,13 +91,39 @@ def capture_session_cookie(school: str, wait_seconds: int = 600,
             continue
     if not mine:
         raise EduPageError('SCHEMA_CHANGED')  # EduPage no longer issues its session cookie
-    return session_cookies(host, mine)[0]
+    return session_cookies(host, mine)[0], remember_cookies(host, jar)
+
+
+def remember_account(store: SessionStore, label: str, session: SavedSession,
+                     cookies: tuple[Cookie, ...],
+                     confirm: Callable[[str, tuple[Cookie, ...]], str | None] = remembered_username) -> bool:
+    """Keep the Remembered Account this sign-in asked for, or forget an earlier one.
+
+    The person asks by ticking "Remember password" in EduPage's dialog. The
+    cookies are kept only if EduPage, asked with them alone, lists a remembered
+    password for this school; otherwise nothing is kept and a Remembered Account
+    from an earlier sign-in is deleted. Returns whether one is kept now.
+    """
+    username = confirm(session.school, cookies)
+    if username:
+        try:
+            store.save_remembered(label, RememberedAccount(session.school, session.account, username, cookies))
+            return True
+        except EduPageError:
+            pass  # the sign-in itself worked; the next expiry opens a window again
+    store.delete_remembered(session.school, label)
+    return False
 
 
 def sign_in(school: str, label: str = '', *, store: SessionStore,
-            wait_seconds: int = 600, playwright: Callable[[], Any] | None = None) -> dict:
-    """Capture a browser session, check it against EduPage, then save it."""
-    cookie = capture_session_cookie(school, wait_seconds, playwright)
+            wait_seconds: int = 600, playwright: Callable[[], Any] | None = None,
+            confirm: Callable[[str, tuple[Cookie, ...]], str | None] = remembered_username) -> dict:
+    """Capture a browser session, check it against EduPage, then save it.
+
+    `remembered` in the result tells whether the person had EduPage remember the
+    password, so that the next expired session needs no window.
+    """
+    cookie, remember = capture_cookies(school, wait_seconds, playwright)
     trial = SavedSession(school, account='', login=label, cookies=(cookie,))
     edu = open_edupage(trial)
     try:
@@ -97,10 +132,12 @@ def sign_in(school: str, label: str = '', *, store: SessionStore,
         login = reported_login(page, school) or label
     finally:
         edu.session.close()
-    store.save(label, SavedSession(school, account, login, (cookie,)))
+    session = SavedSession(school, account, login, (cookie,))
+    store.save(label, session)
     role = ('parent' if account.startswith('Rodic') else
             'student' if account.startswith('Student') else 'teacher')
-    return {'status': 'SAVED', 'school': school, 'role': role}
+    return {'status': 'SAVED', 'school': school, 'role': role,
+            'remembered': remember_account(store, label, session, remember, confirm)}
 
 STATUS_CODE = re.compile(r'^[A-Z][A-Z_]{1,40}$')
 

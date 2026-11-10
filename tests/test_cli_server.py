@@ -175,3 +175,44 @@ def test_bundle_keep_alive_setting_reaches_serve(monkeypatch):
 def test_keep_alive_minutes(value, minutes):
     from edupage_keyring_mcp.keepalive import keep_alive_minutes
     assert keep_alive_minutes(value) == minutes
+
+
+def test_every_school_can_sign_in_again_from_a_remembered_account(monkeypatch):
+    from edupage_keyring_mcp import server
+    from edupage_keyring_mcp.remembered import RememberedSignIn
+    seen = {}
+    store = SimpleNamespace(load=None)
+    monkeypatch.setattr(cli, 'open_credential_store', lambda: store)
+    monkeypatch.setattr(server, 'create_server',
+                        lambda tools: seen.update(tools=tools) or SimpleNamespace(run=lambda: None))
+    assert cli.main(['serve', '--school', 'demo-school,second-school', '--keep-alive=0']) == 0
+    renewers = {session._renew for session in seen['tools'].sessions.values()}
+    assert len(renewers) == 1 and all(s.renews for s in seen['tools'].sessions.values())
+    [renew] = renewers
+    assert isinstance(renew, RememberedSignIn) and renew.store is store
+
+
+def test_there_is_no_setting_that_takes_or_keeps_a_password():
+    bundle = json.loads((ROOT / 'manifest.json').read_text(encoding='utf-8'))
+    assert set(bundle['user_config']) == {'school', 'keep_alive'}
+    options = {option for action in cli.build_parser()._subparsers._group_actions[0].choices.values()
+               for held in action._actions for option in held.option_strings}
+    assert not [option for option in options if 'password' in option or 'remember' in option]
+
+
+def test_logout_removes_the_remembered_account_too(monkeypatch, capsys):
+    from conftest import SAVED, SCHOOL
+    from edupage_keyring_mcp.credential_store import SessionStore
+    from test_credential_store import REMEMBERED, MemoryCredentialStore
+    ring = MemoryCredentialStore()
+    store = SessionStore(ring)
+    monkeypatch.setattr(cli, 'open_credential_store', lambda: store)
+    store.save('', SAVED)
+    store.save_remembered('', REMEMBERED)
+    assert cli.main(['logout', SCHOOL]) == 0 and ring.secrets == {}
+    assert json.loads(capsys.readouterr().out) == {'status': 'REMOVED', 'school': SCHOOL}
+    store.save_remembered('', REMEMBERED)
+    assert cli.main(['logout', SCHOOL]) == 0 and ring.secrets == {}
+    assert json.loads(capsys.readouterr().out)['status'] == 'REMOVED'
+    assert cli.main(['logout', SCHOOL]) == 0
+    assert json.loads(capsys.readouterr().out)['status'] == 'NOTHING_SAVED'

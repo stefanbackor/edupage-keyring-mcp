@@ -17,6 +17,8 @@ from .credential_store import SavedSession, session_cookies
 from .net import SchoolHttp, school_host
 
 ACCOUNT_ROW = re.compile(r'data-rowid="edupage;([^";]+);([^";]+);[^"]*"')
+# EduPage ended the session: a Remembered Account, where the person has one, can open a new one.
+RENEWABLE = frozenset({'AUTH_REQUIRED', 'SESSION_EXPIRED'})
 
 
 def get_page(edu: Any, url: str) -> str:
@@ -100,17 +102,20 @@ class SchoolSession:
     """A lazily opened edupage-api client for one school, guarded by one lock.
 
     `label` names the Credential Store entry when one school has several accounts; it
-    is empty for the usual one account per school.
+    is empty for the usual one account per school. `renew` signs in again with
+    the school's Remembered Account and returns the new Saved Session, or None
+    when there is none or EduPage no longer accepts it.
     """
 
     def __init__(self, school: str, label: str,
                  loader: Callable[[str, str], SavedSession],
                  opener: Callable[[SavedSession], Any] = open_edupage,
-                 lock: Any = None) -> None:
+                 lock: Any = None,
+                 renew: Callable[[str, str], SavedSession | None] | None = None) -> None:
         self.school = school
         self.label = label
         self.host = school_host(school)
-        self._loader, self._opener = loader, opener
+        self._loader, self._opener, self._renew = loader, opener, renew
         self.lock = lock if lock is not None else threading.RLock()
         self.edu: Any = None
         self.saved: SavedSession | None = None
@@ -118,19 +123,32 @@ class SchoolSession:
     def connect(self) -> Any:
         if self.edu is not None:
             return self.edu
-        saved = self._loader(self.school, self.label)
-        edu = self._opener(saved)
+        try:
+            saved = self._loader(self.school, self.label)
+            edu = self._opener(saved)
+        except EduPageError as exc:
+            if self._renew is None or exc.code not in RENEWABLE:
+                raise
+            renewed = self._renew(self.school, self.label)
+            if renewed is None:
+                raise
+            saved, edu = renewed, self._opener(renewed)
         if str(edu.data.get('userid')) != saved.account:
             edu.session.close()
             raise EduPageError('ACCOUNT_MISMATCH')
         self.saved, self.edu = saved, edu
         return edu
 
+    @property
+    def renews(self) -> bool:
+        """Whether an expired session may be replaced by signing in with a Remembered Account."""
+        return self._renew is not None
+
     def keep_alive(self) -> str | None:
         """Load `/user/` if this session is open, so EduPage doesn't end it for inactivity.
 
         Returns READY, the failure code, or None when the session isn't open. Never
-        opens one: no Credential Store read, no sign-in. A session failure drops the
+        opens one: no Credential Store read, no sign-in, no use of a Remembered Account. A session failure drops the
         session until a tool call connects it again.
         """
         with self.lock:

@@ -6,8 +6,12 @@ import pytest
 from conftest import COOKIE, HOST, LABEL, SAVED, SCHOOL
 from edupage_keyring_mcp import credential_store
 from edupage_keyring_mcp.errors import EduPageError
-from edupage_keyring_mcp.credential_store import (Cookie, SavedSession, SessionStore, account_key,
-                                                  parse_cookie, session_cookies)
+from edupage_keyring_mcp.credential_store import (Cookie, RememberedAccount, SavedSession, SessionStore,
+                                                  account_key, parse_cookie, session_cookies)
+
+REMEMBER = (Cookie('edusrs', 'r' * 536, '.edupage.org', '/', 4102444800.0),
+            Cookie('egdid', 'd' * 42, '.edupage.org', '/', 4102444800.0))
+REMEMBERED = RememberedAccount(SCHOOL, 'Rodic100', 'parent@example.invalid', REMEMBER)
 
 
 class MemoryCredentialStore:
@@ -189,3 +193,47 @@ def test_a_secret_over_64_kb_is_refused_when_loading():
 def test_a_session_store_needs_an_explicit_backend():
     with pytest.raises(TypeError):
         SessionStore()  # type: ignore[call-arg]  # no silent fallback past the ADR 0001 allowlist
+
+
+def test_a_remembered_account_is_its_own_entry_beside_the_saved_session():
+    ring = MemoryCredentialStore()
+    store = SessionStore(ring)
+    assert store.load_remembered(SCHOOL, '') is None
+    store.save('', SAVED)
+    store.save_remembered('', REMEMBERED)
+    assert sorted(account for _, account in ring.secrets) == [SCHOOL, SCHOOL + ':remembered']
+    assert store.load_remembered(SCHOOL, '') == REMEMBERED and store.load(SCHOOL, '') == SAVED
+    assert 'edusrs' not in ring.secrets['edupage-keyring-mcp', SCHOOL]
+    assert len(ring.secrets['edupage-keyring-mcp', SCHOOL + ':remembered']) < 1024  # at EduPage's real sizes
+    assert store.load_remembered(SCHOOL, LABEL) is None  # a labelled account has its own
+    store.save_remembered(LABEL, REMEMBERED)
+    assert store.load_remembered(SCHOOL, LABEL.upper()) == REMEMBERED
+    assert store.delete_remembered(SCHOOL, '') and not store.delete_remembered(SCHOOL, '')
+    assert store.load(SCHOOL, '') == SAVED  # forgetting it keeps the session
+
+
+def test_an_unreadable_remembered_account_counts_as_none(capsys):
+    assert SessionStore(MemoryCredentialStore(broken=True)).load_remembered(SCHOOL, '') is None
+    assert 'store locked' not in capsys.readouterr().err
+    ring = MemoryCredentialStore()
+    cookie = ['edusrs', 'v', '.edupage.org', '/', -1.0]
+    good = {'format': 1, 'school': SCHOOL, 'account': 'Rodic100', 'username': 'u', 'cookies': [cookie]}
+    for secret in ['not json', '[]', json.dumps({**good, 'format': 2}), json.dumps({**good, 'school': 'other'}),
+                   json.dumps({**good, 'cookies': []}), json.dumps({**good, 'cookies': [['bad']]}),
+                   json.dumps({**good, 'cookies': [cookie] * 5}), json.dumps({**good, 'username': 7}),
+                   json.dumps({**good, 'account': ''}), json.dumps({**good, 'pad': 'x' * 2048})]:
+        ring.secrets['edupage-keyring-mcp', SCHOOL + ':remembered'] = secret
+        assert SessionStore(ring).load_remembered(SCHOOL, '') is None
+    ring.secrets['edupage-keyring-mcp', SCHOOL + ':remembered'] = json.dumps(good)
+    assert SessionStore(ring).load_remembered(SCHOOL, '') == RememberedAccount(
+        SCHOOL, 'Rodic100', 'u', (Cookie('edusrs', 'v', '.edupage.org'),))
+
+
+def test_a_remembered_account_that_does_not_fit_is_refused():
+    ring = MemoryCredentialStore()
+    for cookies in [(), (Cookie('edusrs', 'x' * 2048, '.edupage.org'),)]:
+        with pytest.raises(EduPageError, match='^SESSION_CORRUPT$'):
+            SessionStore(ring).save_remembered('', RememberedAccount(SCHOOL, 'Rodic100', 'u', cookies))
+    with pytest.raises(EduPageError, match='^CREDENTIAL_STORE_WRITE_FAILED$'):
+        SessionStore(MemoryCredentialStore(broken=True)).save_remembered('', REMEMBERED)
+    assert ring.secrets == {}
