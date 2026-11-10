@@ -4,7 +4,7 @@ import pytest
 from conftest import HOST, LABEL, SCHOOL, FakeEdu, account_page, reply
 from edupage_keyring_mcp import signin
 from edupage_keyring_mcp.errors import EduPageError
-from edupage_keyring_mcp.credential_store import Cookie, SessionStore
+from edupage_keyring_mcp.credential_store import Cookie, RememberedAccount, SessionStore
 from test_credential_store import MemoryCredentialStore
 
 
@@ -63,7 +63,7 @@ def test_the_session_cookie_is_taken_only_after_sign_in_and_only_for_the_school(
            jar_cookie('_ga', '1', '.google.com'),
            jar_cookie('odd', 'bell\x07')]
     chrome = Chrome(f'https://{HOST}/user/', jar)
-    assert signin.capture_session_cookie(SCHOOL, 60, chrome) == Cookie('PHPSESSID', 'abc', HOST)
+    assert signin.capture_cookies(SCHOOL, 60, chrome) == (Cookie('PHPSESSID', 'abc', HOST), ())
     assert chrome.visited == [f'https://{HOST}/'] and chrome.closed
 
 
@@ -92,7 +92,7 @@ def test_a_window_without_the_session_cookie_saves_nothing(web):
 def test_browser_problems_become_codes(failure, code):
     chrome = Chrome('', [], fail=failure)
     with pytest.raises(EduPageError, match=f'^{code}$'):
-        signin.capture_session_cookie(SCHOOL, 60, chrome)
+        signin.capture_cookies(SCHOOL, 60, chrome)
     assert chrome.closed
 
 
@@ -101,9 +101,75 @@ def test_sign_in_stores_the_login_edupage_reports(web):
     web.routes[f'https://{HOST}/user/'] = lambda r: reply(r, 200, account_page(login='parent.real@example.invalid'))
     ring = MemoryCredentialStore()
     result = signin.sign_in(SCHOOL, store=SessionStore(ring), playwright=chrome)
-    assert result == {'status': 'SAVED', 'school': SCHOOL, 'role': 'parent'}
+    assert result == {'status': 'SAVED', 'school': SCHOOL, 'role': 'parent', 'remembered': False}
     saved = SessionStore(ring).load(SCHOOL, '')
     assert saved.account == 'Rodic100' and saved.login == 'parent.real@example.invalid'
+
+
+REMEMBER_JAR = [jar_cookie('PHPSESSID', 'abc'),
+                {'name': 'edusrs', 'value': 'synthetic-remembering', 'domain': '.edupage.org', 'path': '/',
+                 'expires': 4102444800.5, 'httpOnly': True},
+                {'name': 'egdid', 'value': 'synthetic-device', 'domain': '.edupage.org', 'path': '/',
+                 'expires': 4102444800.5, 'httpOnly': True},
+                jar_cookie('edusrs', 'other-school', 'other.edupage.org'), jar_cookie('edusrs', 'x', '.example.com'),
+                jar_cookie('hsid', 'h1'), jar_cookie('erfp', 'r1')]
+REMEMBER = (Cookie('edusrs', 'synthetic-remembering', '.edupage.org', '/', 4102444800.5),
+            Cookie('egdid', 'synthetic-device', '.edupage.org', '/', 4102444800.5))
+
+
+def signed_in(web, jar, confirm, ring=None):
+    web.routes[f'https://{HOST}/user/'] = lambda r: reply(r, 200, account_page())
+    ring = MemoryCredentialStore() if ring is None else ring
+    asked = []
+
+    def confirming(school, cookies):
+        asked.append((school, cookies))
+        return confirm
+    result = signin.sign_in(SCHOOL, store=SessionStore(ring), confirm=confirming,
+                            playwright=Chrome(f'https://{HOST}/user/', jar))
+    return result, SessionStore(ring), asked
+
+
+def test_edupages_remember_cookies_are_taken_from_the_window_and_nothing_else():
+    session, remember = signin.capture_cookies(SCHOOL, 60, Chrome(f'https://{HOST}/user/', REMEMBER_JAR))
+    assert session == Cookie('PHPSESSID', 'abc', HOST) and remember == REMEMBER
+
+
+def test_a_ticked_remember_password_keeps_a_remembered_account(web):
+    result, store, asked = signed_in(web, REMEMBER_JAR, confirm='parent.real@example.invalid')
+    assert result == {'status': 'SAVED', 'school': SCHOOL, 'role': 'parent', 'remembered': True}
+    assert asked == [(SCHOOL, REMEMBER)]  # EduPage is asked with the remember cookies alone
+    assert store.load_remembered(SCHOOL, '') == RememberedAccount(
+        SCHOOL, 'Rodic100', 'parent.real@example.invalid', REMEMBER)
+    assert store.load(SCHOOL, '').cookies == (Cookie('PHPSESSID', 'abc', HOST),)  # the session stays as small
+
+
+def test_without_the_tick_nothing_is_kept_and_an_earlier_one_is_forgotten(web):
+    ring = MemoryCredentialStore()
+    SessionStore(ring).save_remembered('', RememberedAccount(SCHOOL, 'Rodic100', 'u', REMEMBER))
+    result, store, _ = signed_in(web, REMEMBER_JAR, confirm=None, ring=ring)  # EduPage lists no remembered password
+    assert result['remembered'] is False and store.load_remembered(SCHOOL, '') is None
+    assert list(ring.secrets) == [('edupage-keyring-mcp', SCHOOL)]
+
+
+def test_a_window_without_remember_cookies_does_not_ask_edupage(web):
+    web.routes[f'https://{HOST}/user/'] = lambda r: reply(r, 200, account_page())
+    ring = MemoryCredentialStore()
+    result = signin.sign_in(SCHOOL, store=SessionStore(ring),
+                            playwright=Chrome(f'https://{HOST}/user/', [jar_cookie('PHPSESSID', 'abc')]))
+    assert result['remembered'] is False
+    assert set(web.calls) == {f'https://{HOST}/user/'}  # only the check of the new session
+
+
+def test_a_remembered_account_that_cannot_be_stored_does_not_fail_the_sign_in(web):
+    class SessionsOnly(MemoryCredentialStore):
+        def set_password(self, service, account, secret):
+            if account.endswith(':remembered'):
+                raise OSError('store full')
+            super().set_password(service, account, secret)
+    result, store, _ = signed_in(web, REMEMBER_JAR, confirm='u', ring=SessionsOnly())
+    assert result['status'] == 'SAVED' and result['remembered'] is False
+    assert store.load(SCHOOL, '').account == 'Rodic100'
 
 
 class Child:

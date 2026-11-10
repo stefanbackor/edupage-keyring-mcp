@@ -26,7 +26,7 @@ def waits(rounds):
     return wait, asked
 
 
-def test_a_connected_session_is_pinged_once_per_interval(web):
+def test_a_connected_session_is_pinged_once_per_interval(web, capsys):
     web.routes[USERHOME] = lambda r: reply(r, 200, account_page())
     session, reads = counting_session()
     session.connect()
@@ -36,13 +36,15 @@ def test_a_connected_session_is_pinged_once_per_interval(web):
     assert web.calls == [USERHOME] * 3
     assert asked == [3600] * 4
     assert reads == [SCHOOL] and session.edu is not None
+    assert capsys.readouterr().err == f'edupage-keyring-mcp: keep-alive {SCHOOL} READY\n' * 3
 
 
-def test_a_session_never_opened_gets_no_request_and_no_store_read(web):
+def test_a_session_never_opened_gets_no_request_and_no_store_read(web, capsys):
     session, reads = counting_session()
     wait, _ = waits(2)
     KeepAlive([session], 60, wait=wait).run()
     assert web.calls == [] and reads == [] and session.edu is None
+    assert capsys.readouterr().err == ''
 
 
 def test_a_ping_waits_for_a_tool_call_holding_the_lock(web):

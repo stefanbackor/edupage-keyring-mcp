@@ -5,7 +5,8 @@ EduPage signs a session out after about 110-180 minutes without requests. While
 the server runs, this loads each open school's home page once per interval (every
 DEFAULT_MINUTES unless `--keep-alive` says otherwise; 0 turns it off). It
 never opens a session that isn't open yet, so it never reads the Credential Store
-and never starts a sign-in.
+and never starts a sign-in. Each ping writes one line to the server log, e.g.
+`keep-alive <school> READY`.
 """
 from __future__ import annotations
 
@@ -56,7 +57,7 @@ class KeepAlive:
     def tick(self) -> None:
         for session in self.sessions:
             code = session.keep_alive()
-            if code not in (None, 'READY'):
+            if code is not None:  # one line per ping sent; none for a school not open
                 log_line(f'keep-alive {session.school} {code}')
 
     def run(self) -> None:

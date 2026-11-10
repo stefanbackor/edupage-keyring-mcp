@@ -13,7 +13,7 @@ from urllib.parse import urljoin, urlsplit
 import requests
 
 from . import meals
-from .client import SchoolSession, _fold
+from .client import RENEWABLE, SchoolSession, _fold
 from .data import (MAX_TIMELINE_DAYS, _name, event_data, grade_data, lesson_data,
                    missing_teacher_names, parse_day, parse_since, plain, recipient_matches,
                    tolerant_grades)
@@ -148,7 +148,18 @@ class FullTools:
         raise EduPageError('CHILD_REQUIRED' if not child else 'UNKNOWN_CHILD', children=known)
 
     def run(self, session: SchoolSession | None, fn: Callable[[], dict]) -> dict:
-        """Execute `fn`, mapping every failure to a fixed status code."""
+        """Execute `fn`, mapping every failure to a fixed status code.
+
+        A call that finds its open session ended by EduPage runs once more:
+        connecting again signs in with the school's Remembered Account, if it has one.
+        """
+        was_open = session is not None and session.edu is not None
+        result = self.run_once(session, fn)
+        if was_open and session.renews and result.get('status') in RENEWABLE:
+            result = self.run_once(session, fn)
+        return result
+
+    def run_once(self, session: SchoolSession | None, fn: Callable[[], dict]) -> dict:
         try:
             if session is None:
                 result = fn()
@@ -264,6 +275,8 @@ class FullTools:
         if code == 'SIGNIN_STARTED':
             result['next'] = ('A Chrome window is open on EduPage. Tell the person to sign in there '
                               '(including any two-factor step), then call wait_for_sign_in.')
+            result['next'] += (' Mention once that ticking "Remember password" in the dialog EduPage shows '
+                               'after signing in lets this computer sign in again by itself next time.')
         return result
 
     def wait_for_sign_in(self, school: str = '', seconds: int = 45) -> dict:

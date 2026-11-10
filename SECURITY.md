@@ -14,9 +14,11 @@ In scope: anything that lets a tool caller (including a model) reach a host
 other than the configured `*.edupage.org` school hosts, read or set
 credentials or cookies, bypass the write-tool checks, see server error bodies,
 or act for the wrong child or account; and any way a password or session could
-end up outside the macOS Keychain.
+end up outside the Credential Store (the macOS Keychain or Windows Credential
+Manager), or a Remembered Account could be kept or used without the person
+having ticked "Remember password" in EduPage's own dialog.
 
-Out of scope: EduPage's own behaviour and the security of the person's Mac.
+Out of scope: EduPage's own behaviour and the security of the person's computer.
 
 ## Supported versions
 

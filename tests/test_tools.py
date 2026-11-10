@@ -204,6 +204,7 @@ def test_sign_in_opens_a_window_only_when_the_session_is_gone():
     assert browser.started == []
     result = tools.sign_in('second-school')
     assert result['status'] == 'SIGNIN_STARTED' and 'wait_for_sign_in' in result['next']
+    assert 'ticking "Remember password"' in result['next']  # EduPage's own dialog; nothing to type here
     assert tools.sign_in('second-school')['status'] == 'SIGNIN_IN_PROGRESS'
     assert tools.auth_status('second-school')['signin'] == 'IN_PROGRESS'
     assert browser.started == ['second-school']

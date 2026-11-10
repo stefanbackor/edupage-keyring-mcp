@@ -48,7 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
                             f'Default {DEFAULT_MINUTES}; 0 turns it off.')
 
     for name, text in [('login', 'Sign in to a school in Chrome and save the session.'),
-                       ('logout', 'Delete a school\'s saved session from the Credential Store.')]:
+                       ('logout', 'Delete a school\'s saved session, and its remembered account, '
+                                  'from the Credential Store.')]:
         cmd = sub.add_parser(name, help=text)
         cmd.add_argument('school', help='School name, or its EduPage address (e.g. https://myschool.edupage.org).')
         cmd.add_argument('--username', help='Only to keep two accounts at one school apart '
@@ -56,7 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
         if name == 'login':
             cmd.add_argument('--timeout', type=int, default=600, help='Seconds to wait for sign-in.')
 
-    status = sub.add_parser('status', help='Check saved sessions (prints statuses only).')
+    status = sub.add_parser('status', help='Check saved sessions, renewing an expired one from a '
+                                           'remembered account (prints statuses only).')
     _schools_parser(status)
     probe = sub.add_parser('probe', help='Call every read tool once; prints statuses and counts only.')
     _schools_parser(probe)
@@ -64,8 +66,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _sessions(args: argparse.Namespace, store: SessionStore) -> list[SchoolSession]:
+    from .remembered import RememberedSignIn
     pairs = parse_schools(args.school, args.username)
-    return [SchoolSession(school, username, store.load) for school, username in pairs]
+    renew = RememberedSignIn(store)  # used only for a school whose person ticked "Remember password"
+    return [SchoolSession(school, username, store.load, renew=renew) for school, username in pairs]
 
 
 def _print(data: dict) -> None:
@@ -130,13 +134,15 @@ def main(argv: list[str] | None = None) -> int:
             from .signin import sign_in
             args.school = school_name(args.school)
             print(f'Opening Chrome for {args.school}.edupage.org. Sign in there; '
-                  'this window waits until EduPage shows your account.', file=sys.stderr)
+                  'this window waits until EduPage shows your account. Tick "Remember password" in '
+                  'EduPage\'s dialog if this computer should sign in again by itself.', file=sys.stderr)
             _print(sign_in(args.school, login_name(args.username), store=store,
                            wait_seconds=args.timeout))
         elif args.command == 'logout':
             args.school = school_name(args.school)
-            removed = store.delete(args.school, login_name(args.username))
-            _print({'status': 'REMOVED' if removed else 'NOTHING_SAVED', 'school': args.school})
+            label = login_name(args.username)
+            removed = [store.delete(args.school, label), store.delete_remembered(args.school, label)]
+            _print({'status': 'REMOVED' if any(removed) else 'NOTHING_SAVED', 'school': args.school})
         elif args.command == 'status':
             from .tools import FullTools
             _print(FullTools(_sessions(args, store)).list_schools())

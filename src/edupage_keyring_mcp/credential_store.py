@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Saved Sessions in the Credential Store (macOS Keychain or Windows Credential Manager).
+"""Saved Sessions and Remembered Accounts in the Credential Store (macOS Keychain or Windows Credential Manager).
 
 A Saved Session is the EduPage session cookie from one browser sign-in, together
 with the EduPage account it belongs to, stored for one school (and optionally one
@@ -10,6 +10,12 @@ Credential Store entry, the same on both platforms: service `edupage-keyring-mcp
 `<school>/<sha1 of label>` when a label tells several accounts at one school
 apart (and for sessions saved before labels became optional);
 secret = JSON {"format": 2, "account": ..., "login": ..., "cookies": [[name, value, domain, path, expires], ...]}.
+
+A Remembered Account is a second entry, written only when the person ticked
+"Remember password" in EduPage's own sign-in dialog (ADR 0002): the cookies by
+which EduPage recognises that sign-in window again, and the account they are for.
+Its account is `<that account>:remembered`;
+secret = JSON {"format": 1, "school": ..., "account": ..., "username": ..., "cookies": [...]}.
 """
 from __future__ import annotations
 
@@ -27,13 +33,16 @@ FORMAT = 2
 SECRET_LIMIT = 2 * 1024  # characters, on save; Credential Manager holds 2560 bytes of UTF-16
 LOAD_LIMIT = 64 * 1024   # characters, on load; Saved Sessions from older versions are larger
 COOKIE_LIMIT = 64        # cookies in a loaded Saved Session
+REMEMBERED_FORMAT = 1
+REMEMBERED_SUFFIX = ':remembered'  # no school name or label hash contains a colon
+REMEMBERED_COOKIE_LIMIT = 4
 TOKEN_CHARS = frozenset('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
                         "!#$%&'*+-.^_`|~")
 
 
 # The OS Credential Store backend accepted on each platform (ADR 0001); nothing else,
-# with the attributes set on it before use. On Windows a Saved Session must stay on
-# this machine, never roam to others with a domain profile.
+# with the attributes set on it before use. On Windows a Saved Session or Remembered
+# Account must stay on this machine, never roam to others with a domain profile.
 CREDENTIAL_STORES: dict[str, tuple[str, dict[str, Any]]] = {
     'darwin': ('keyring.backends.macOS', {}),
     'win32': ('keyring.backends.Windows', {'persist': 'local machine'}),
@@ -114,6 +123,14 @@ class SavedSession:
     cookies: tuple[Cookie, ...]
 
 
+@dataclass(frozen=True)
+class RememberedAccount:
+    school: str
+    account: str   # EduPage user ID
+    username: str  # the login name EduPage lists the remembered account under
+    cookies: tuple[Cookie, ...]
+
+
 class SessionStore:
     """Credential Store persistence; `backend` is anything with keyring's three functions.
 
@@ -160,6 +177,46 @@ class SessionStore:
     def delete(self, school: str, label: str) -> bool:
         try:
             self.backend.delete_password(SERVICE, account_key(school, label))
+        except Exception:
+            return False
+        return True
+
+    def save_remembered(self, label: str, remembered: RememberedAccount) -> None:
+        secret = json.dumps({
+            'format': REMEMBERED_FORMAT, 'school': remembered.school, 'account': remembered.account,
+            'username': remembered.username, 'saved': int(time.time()),
+            'cookies': [[c.name, c.value, c.domain, c.path, c.expires] for c in remembered.cookies],
+        }, separators=(',', ':'))
+        if not remembered.cookies or len(secret) > SECRET_LIMIT:
+            raise EduPageError('SESSION_CORRUPT')
+        try:
+            self.backend.set_password(SERVICE, account_key(remembered.school, label) + REMEMBERED_SUFFIX, secret)
+        except Exception as exc:
+            log_unexpected(exc, 'CREDENTIAL_STORE_WRITE_FAILED')
+            raise EduPageError('CREDENTIAL_STORE_WRITE_FAILED') from None
+
+    def load_remembered(self, school: str, label: str) -> RememberedAccount | None:
+        """The Remembered Account for a school, or None when there is none or it can't be read."""
+        try:
+            secret = self.backend.get_password(SERVICE, account_key(school, label) + REMEMBERED_SUFFIX)
+        except Exception as exc:
+            log_unexpected(exc, 'CREDENTIAL_STORE_LOCKED')
+            return None
+        try:
+            data = json.loads(secret) if secret and len(secret) <= SECRET_LIMIT else None
+            if not (isinstance(data, dict) and data.get('format') == REMEMBERED_FORMAT
+                    and data.get('school') == school and isinstance(data.get('cookies'), list)
+                    and 0 < len(data['cookies']) <= REMEMBERED_COOKIE_LIMIT
+                    and all(isinstance(data.get(key), str) and data[key] for key in ('account', 'username'))):
+                return None
+            cookies = tuple(parse_cookie(*spec) for spec in data['cookies'])
+        except Exception:
+            return None
+        return RememberedAccount(school, data['account'], data['username'], cookies)
+
+    def delete_remembered(self, school: str, label: str) -> bool:
+        try:
+            self.backend.delete_password(SERVICE, account_key(school, label) + REMEMBERED_SUFFIX)
         except Exception:
             return False
         return True

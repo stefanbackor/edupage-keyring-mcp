@@ -4,7 +4,7 @@
   "display_name": "EduPage Keyring",
   "version": "0.6.0",
   "description": "EduPage timetables, grades, homework and messages; session in the OS Credential Store, no password.",
-  "long_description": "Lets Claude read your EduPage school account: timetables, grades, homework, tests, absences, messages, menus and more, for every child and school you have.\n\nYou sign in once per school in Chrome, on EduPage's own page, two-factor included. Only EduPage's session cookie is kept, in your computer's Credential Store (the macOS Keychain or Windows Credential Manager); no password is ever stored or configured. Requires macOS or Windows (Windows support is beta) and Google Chrome.\n\nNot affiliated with or endorsed by aSc Applied Software Consultants, the company that makes EduPage.",
+  "long_description": "Lets Claude read your EduPage school account: timetables, grades, homework, tests, absences, messages, menus and more, for every child and school you have.\n\nYou sign in once per school in Chrome, on EduPage's own page, two-factor included. Only EduPage's session cookie is kept, in your computer's Credential Store (the macOS Keychain or Windows Credential Manager); no password is ever stored or configured. Tick \"Remember password\" in EduPage's own dialog and the extension also keeps what EduPage issues for that, so it can sign in again by itself. Requires macOS or Windows (Windows support is beta) and Google Chrome.\n\nNot affiliated with or endorsed by aSc Applied Software Consultants, the company that makes EduPage.",
   "author": {
     "name": "Stefan Backor",
     "url": "https://github.com/stefanbackor"
