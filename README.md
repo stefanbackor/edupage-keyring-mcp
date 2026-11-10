@@ -156,9 +156,10 @@ and the keep-alive.
   the EduPage home page of each school it has already used. Change the interval
   with `"--keep-alive", "90"` (5 to 120; smaller values count as 5), or turn it off with
   `"--keep-alive", "0"`. It never opens a school you haven't used since the
-  client started and never opens a sign-in window. If EduPage has ended the
-  session anyway, the server stops for that school until you next use it, and
-  the server log gets one line with the school and status code. It only runs
+  client started and never opens a sign-in window. Each ping writes one line
+  with the school and status code to the server log (`keep-alive myschool READY`).
+  If EduPage has ended the session anyway, the server stops for that school
+  until you next use it. It only runs
   while the client is open and the computer is awake: after a night asleep you
   may still need to sign in again. In the Claude Desktop extension, this is the
   **Keep-alive (minutes)** field.
